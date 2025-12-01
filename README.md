@@ -428,11 +428,6 @@ Contributions welcome! Areas of interest:
 
 MIT License - See LICENSE file for details
 
-## 🙏 Acknowledgments
-
-- **etl-rust** - Rust implementation baseline
-- **Anthropic Claude** - AI pair programming assistance
-
 ## 📚 Further Reading
 
 - [GORM Documentation](https://gorm.io/)
