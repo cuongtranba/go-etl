@@ -134,6 +134,154 @@ MongoDB Collection (1M users)
     ↓ PostgreSQL (15 normalized tables, 40M records)
 ```
 
+### Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Main
+    participant Manager
+    participant ETL as ETL Pipeline
+    participant Bucket as Bucket (Worker Pool)
+    participant MongoDB
+    participant PostgreSQL
+
+    Main->>Manager: AddPipeline(userETL)
+    Main->>Manager: RunAll(ctx)
+
+    Manager->>ETL: Run(ctx, bucketConfig)
+
+    rect rgb(240, 248, 255)
+        Note over ETL,PostgreSQL: PreProcess Phase
+        ETL->>PostgreSQL: AutoMigrate (create 15 tables)
+        PostgreSQL-->>ETL: Tables created
+    end
+
+    rect rgb(255, 248, 240)
+        Note over ETL,MongoDB: Extract Phase
+        ETL->>MongoDB: Find() with cursor
+        MongoDB-->>ETL: Stream users via channel
+    end
+
+    rect rgb(240, 255, 240)
+        Note over ETL,Bucket: Batch & Transform Phase
+        loop For each user from channel
+            ETL->>Bucket: Consume(user)
+            Note over Bucket: Accumulate until:<br/>- 500 items OR<br/>- 5s timeout OR<br/>- Channel closed
+        end
+
+        par Worker Pool (N = CPUs × 2)
+            Bucket->>Bucket: Worker 1: Process batch
+            Bucket->>Bucket: Worker 2: Process batch
+            Bucket->>Bucket: Worker N: Process batch
+        end
+
+        loop For each batch
+            Bucket->>ETL: Transform(user)
+            Note over ETL: 1 User → TransformedUser<br/>(15 table structures)
+        end
+    end
+
+    rect rgb(255, 240, 245)
+        Note over ETL,PostgreSQL: Load Phase
+        loop For each batch (500 users)
+            ETL->>PostgreSQL: Batch INSERT users
+            ETL->>PostgreSQL: Batch INSERT addresses
+            ETL->>PostgreSQL: Batch INSERT profiles
+            ETL->>PostgreSQL: Batch INSERT education
+            ETL->>PostgreSQL: Batch INSERT experience
+            ETL->>PostgreSQL: Batch INSERT preferences
+            ETL->>PostgreSQL: Batch INSERT settings
+            ETL->>PostgreSQL: Batch INSERT activity_log
+            ETL->>PostgreSQL: Batch INSERT transactions
+            ETL->>PostgreSQL: Batch INSERT messages
+            ETL->>PostgreSQL: Batch INSERT attachments
+            ETL->>PostgreSQL: Batch INSERT social_media
+            ETL->>PostgreSQL: Batch INSERT posts
+            ETL->>PostgreSQL: Batch INSERT groups
+            ETL->>PostgreSQL: Batch INSERT large_data
+            PostgreSQL-->>ETL: Batch committed
+        end
+    end
+
+    rect rgb(245, 245, 245)
+        Note over ETL: PostProcess Phase
+        ETL->>ETL: Cleanup & metrics
+    end
+
+    ETL-->>Manager: Pipeline complete
+    Manager-->>Main: All pipelines done
+```
+
+### Component Interaction
+
+```mermaid
+flowchart TB
+    subgraph Main["Main Application"]
+        ENV[Load .env]
+        MONGO_CONN[Connect MongoDB]
+        PG_CONN[Connect PostgreSQL]
+    end
+
+    subgraph Manager["ETL Manager"]
+        SEM[Semaphore<br/>Concurrency Control]
+        ADAPTER[Pipeline Adapter]
+    end
+
+    subgraph ETL["ETL Pipeline"]
+        PRE[PreProcess]
+        EXT[Extract]
+        TRANS[Transform]
+        LOAD[Load]
+        POST[PostProcess]
+    end
+
+    subgraph Bucket["Bucket System"]
+        QUEUE[Item Queue]
+        TIMER[Flush Timer<br/>5s timeout]
+        WORKERS[Worker Pool<br/>N = CPUs × 2]
+    end
+
+    subgraph MongoDB["MongoDB"]
+        USERS[(users collection<br/>1M documents)]
+    end
+
+    subgraph PostgreSQL["PostgreSQL"]
+        T1[(users)]
+        T2[(addresses)]
+        T3[(profiles)]
+        T4[(education)]
+        T5[(experience)]
+        T6[(+ 10 more tables)]
+    end
+
+    ENV --> MONGO_CONN
+    ENV --> PG_CONN
+    MONGO_CONN --> Manager
+    PG_CONN --> Manager
+
+    Manager --> SEM
+    SEM --> ADAPTER
+    ADAPTER --> ETL
+
+    PRE --> EXT
+    EXT --> Bucket
+    Bucket --> TRANS
+    TRANS --> LOAD
+    LOAD --> POST
+
+    QUEUE --> WORKERS
+    TIMER --> WORKERS
+
+    EXT -.->|cursor| USERS
+    LOAD -.->|batch insert| T1
+    LOAD -.->|batch insert| T2
+    LOAD -.->|batch insert| T3
+    LOAD -.->|batch insert| T4
+    LOAD -.->|batch insert| T5
+    LOAD -.->|batch insert| T6
+```
+
 ## 🗃️ Database Schema
 
 ### MongoDB → PostgreSQL Mapping
@@ -198,24 +346,6 @@ Despite being slower, Go is often the better choice:
 - ✅ **Compilation:** 20-60× faster compile times
 
 **Go makes sense for most projects** where the 26% performance difference doesn't justify the increased development complexity.
-
-## 💰 Cost Analysis
-
-### Small Scale (< 1M records/day)
-- **Go wins** - Development speed matters more
-- Infrastructure savings: ~$120/year
-- Developer cost difference: $30,000/year
-
-### Large Scale (1B-10B records/day)
-- **Still Go for most** - Cost difference is small
-- Infrastructure savings: ~$13,000/year
-- Developer cost difference: $300,000/year
-
-### Very Large Scale (> 100B records/day)
-- **Rust starts making sense**
-- Infrastructure savings: $156,000+/year
-- Performance becomes critical
-- Justifies higher development cost
 
 ## 🎯 Recommendations
 
